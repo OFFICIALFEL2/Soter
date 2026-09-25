@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Text,
   View,
@@ -12,7 +12,8 @@ import { CameraView, BarcodeScanningResult } from 'expo-camera';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { useTheme } from '../theme/ThemeContext';
-import { createScanDeduper } from './scanDeduper';
+import { createScanDeduper, SCAN_DEDUPE_WINDOW_MS } from './scanDeduper';
+import { scannerBreadcrumbs } from '../services/scannerBreadcrumbs';
 import { useCameraPermission } from '../hooks/useCameraPermission';
 import { CameraPermissionDenied } from '../components/CameraPermissionDenied';
 import { useTranslation } from '../i18n/useTranslation';
@@ -54,6 +55,23 @@ export const ScannerScreen: React.FC<Props> = ({ navigation }) => {
   const { colors } = useTheme();
   const { t } = useTranslation();
 
+  // Session counters, kept in refs because a crash report needs the counts as
+  // of the moment the scanner session ends, not as of the last render.
+  const sessionStartedAt = useRef(Date.now());
+  const sessionCounts = useRef({ scanned: 0, verified: 0, failed: 0, skipped: 0 });
+
+  useEffect(() => {
+    sessionStartedAt.current = Date.now();
+    scannerBreadcrumbs.sessionStarted('single', 'Scanner');
+
+    return () => {
+      scannerBreadcrumbs.sessionEnded('single', {
+        ...sessionCounts.current,
+        durationMs: Date.now() - sessionStartedAt.current,
+      });
+    };
+  }, []);
+
   const {
     permissionState,
     isGranted,
@@ -66,16 +84,31 @@ export const ScannerScreen: React.FC<Props> = ({ navigation }) => {
   } = useCameraPermission();
 
   const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
-    if (isDuplicateScan(data.trim())) return;
+    if (isDuplicateScan(data.trim())) {
+      sessionCounts.current.skipped += 1;
+      scannerBreadcrumbs.scanDeduplicated('single', SCAN_DEDUPE_WINDOW_MS);
+      return;
+    }
 
     setScanned(true);
+    sessionCounts.current.scanned += 1;
+    scannerBreadcrumbs.scanReceived(
+      'single',
+      data.length,
+      data.trim().startsWith('soter://') ? 'deep_link' : 'url',
+    );
 
     const aidId = parseAidIdFromQRCode(data);
 
     if (aidId) {
+      sessionCounts.current.verified += 1;
+      scannerBreadcrumbs.scanNavigated('single', 'AidDetails');
       navigation.replace('AidDetails', { aidId });
       return;
     }
+
+    sessionCounts.current.failed += 1;
+    scannerBreadcrumbs.scanParseFailed('single', 'invalid_soter_qr', data.length);
 
     Alert.alert(
       'Invalid QR Code',

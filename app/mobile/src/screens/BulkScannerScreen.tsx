@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Text,
   View,
@@ -14,7 +14,8 @@ import { RootStackParamList } from '../navigation/types';
 import { useTheme } from '../theme/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { useSync } from '../contexts/SyncContext';
-import { createScanDeduper } from './scanDeduper';
+import { createScanDeduper, SCAN_DEDUPE_WINDOW_MS } from './scanDeduper';
+import { scannerBreadcrumbs } from '../services/scannerBreadcrumbs';
 import { useCameraPermission } from '../hooks/useCameraPermission';
 import { CameraPermissionDenied } from '../components/CameraPermissionDenied';
 
@@ -48,6 +49,27 @@ export const BulkScannerScreen: React.FC<Props> = ({ navigation }) => {
   const { queueClaimConfirmation, isConnected } = useSync();
   const [isDuplicateScan] = useState(() => createScanDeduper());
 
+  // Latest session stats for the breadcrumb trail, in a ref so the unmount
+  // handler reports the counts as of teardown rather than the last render.
+  const statsRef = useRef(stats);
+  const sessionStartedAt = useRef(Date.now());
+
+  useEffect(() => {
+    statsRef.current = stats;
+  }, [stats]);
+
+  useEffect(() => {
+    sessionStartedAt.current = Date.now();
+    scannerBreadcrumbs.sessionStarted('bulk', 'BulkScanner');
+
+    return () => {
+      scannerBreadcrumbs.sessionEnded('bulk', {
+        ...statsRef.current,
+        durationMs: Date.now() - sessionStartedAt.current,
+      });
+    };
+  }, []);
+
   const {
     permissionState,
     isGranted,
@@ -66,10 +88,16 @@ export const BulkScannerScreen: React.FC<Props> = ({ navigation }) => {
     if (isDuplicateScan(normalizedData)) {
       setStats(prev => ({ ...prev, skipped: prev.skipped + 1 }));
       setLastScanResult({ status: 'skipped', message: 'Duplicate scan skipped. Ready for the next package.' });
+      scannerBreadcrumbs.scanDeduplicated('bulk', SCAN_DEDUPE_WINDOW_MS);
       return;
     }
 
     setIsProcessing(true);
+    scannerBreadcrumbs.scanReceived(
+      'bulk',
+      normalizedData.length,
+      normalizedData.startsWith('soter://') ? 'deep_link' : 'unknown',
+    );
 
     // Check if it's the correct format: soter://package/{id}
     const regex = /^soter:\/\/package\/(.+)$/;
@@ -90,14 +118,28 @@ export const BulkScannerScreen: React.FC<Props> = ({ navigation }) => {
             status: 'success', 
             message: result.status === 'completed' ? 'Package verified successfully!' : 'Package queued for verification (offline).'
           });
+          // `queued` means the offline queue took it; `completed` means it is
+          // already confirmed. Same trail, different resolution.
+          if (result.status === 'queued') {
+            scannerBreadcrumbs.scanQueued('bulk', 'queued');
+          } else {
+            scannerBreadcrumbs.scanVerified('bulk', 'completed');
+          }
         }
       } catch (error) {
         setStats(prev => ({ ...prev, failed: prev.failed + 1 }));
         setLastScanResult({ status: 'error', message: 'Verification failed. Please try again.' });
+        // Only the error *class* is reported — messages can echo scanned input.
+        scannerBreadcrumbs.scanFailed(
+          'bulk',
+          'verification_failed',
+          error instanceof Error ? error.name : 'UnknownError',
+        );
       }
     } else {
       setStats(prev => ({ ...prev, failed: prev.failed + 1 }));
       setLastScanResult({ status: 'error', message: 'Invalid Soter QR code.' });
+      scannerBreadcrumbs.scanParseFailed('bulk', 'invalid_soter_qr', normalizedData.length);
     }
 
     // Short delay before allowing the next scan to provide feedback

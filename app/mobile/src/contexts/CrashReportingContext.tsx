@@ -8,11 +8,13 @@ import React, {
 } from 'react';
 import { AppState } from 'react-native';
 import {
+  addBreadcrumb,
   initCrashReporting,
   isCrashReportingEnabled,
   setCrashReportingEnabled,
   flushCrashReports,
 } from '../services/crashReporting';
+import { setScannerBreadcrumbEmitter } from '../services/scannerBreadcrumbs';
 
 interface CrashReportingContextValue {
   /** Whether crash reporting is currently active. */
@@ -54,11 +56,17 @@ export const CrashReportingProvider: React.FC<PropsWithChildren> = ({
         if (!mounted) return;
         setEnabled(preference);
         initCrashReporting(preference);
+        // Scanner breadcrumbs go through the crash reporter's own
+        // `addBreadcrumb` once the SDK is initialised. Wiring it here keeps the
+        // dependency direction explicit instead of having the scanner screens
+        // import the SDK.
+        setScannerBreadcrumbEmitter(addBreadcrumb);
       } catch {
         // If storage read fails, default to enabled
         if (mounted) {
           setEnabled(true);
           initCrashReporting(true);
+          setScannerBreadcrumbEmitter(addBreadcrumb);
         }
       } finally {
         if (mounted) setIsLoading(false);
