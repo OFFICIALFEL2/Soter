@@ -91,7 +91,7 @@ export const BulkScannerScreen: React.FC<Props> = ({ navigation }) => {
 
     setStats(prev => ({ ...prev, scanned: prev.scanned + 1 }));
 
-    80|    if (match && match[1]) {
+    if (match && match[1]) {
       const aidId = match[1];
       const claimId = `claim-${aidId}`; // Assuming standard claimId format for bulk verify
 
@@ -106,7 +106,7 @@ export const BulkScannerScreen: React.FC<Props> = ({ navigation }) => {
           });
           setStats(prev => ({ ...prev, verified: prev.verified + 1 }));
           setLastScanResult({ 
-    90|            status: 'success', 
+            status: 'success', 
             message: result.status === 'completed' ? 'Package verified successfully!' : 'Package queued for verification (offline).'
           });
         }
@@ -370,4 +370,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-
